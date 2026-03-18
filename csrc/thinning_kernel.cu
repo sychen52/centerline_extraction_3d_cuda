@@ -1,6 +1,11 @@
 #include <torch/extension.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <thrust/copy.h>
+#include <thrust/execution_policy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <vector>
 
 __constant__ int d_eulerLUT[256];
 
@@ -119,7 +124,7 @@ __device__ bool is_euler_invariant(const int* neighbors) {
     return (eulerChar == 0);
 }
 
-__device__ int uf_find(int i, int* parent) {
+__host__ __device__ int uf_find(int i, int* parent) {
     while(parent[i] != i) {
         parent[i] = parent[parent[i]];
         i = parent[i];
@@ -127,7 +132,7 @@ __device__ int uf_find(int i, int* parent) {
     return i;
 }
 
-__device__ void uf_union(int i, int j, int* parent) {
+__host__ __device__ void uf_union(int i, int j, int* parent) {
     int root_i = uf_find(i, parent);
     int root_j = uf_find(j, parent);
     if(root_i != root_j) {
@@ -135,7 +140,7 @@ __device__ void uf_union(int i, int j, int* parent) {
     }
 }
 
-__device__ bool is_simple_point(const int* neighbors) {
+__host__ __device__ bool is_simple_point(const int* neighbors) {
     int parent[27];
     for (int i = 0; i < 27; ++i) {
         parent[i] = i;
@@ -181,7 +186,7 @@ __global__ void mark_deletable_points_kernel(
 
     if (x >= w || y >= h || z >= d) return;
 
-    size_t idx = z * (h * w) + y * w + x;
+    size_t idx = (size_t)z * (h * w) + y * w + x;
     if (img[idx] != 1) return;
 
     int neighbors[27];
@@ -199,11 +204,11 @@ __global__ void mark_deletable_points_kernel(
                 
                 int val = 0;
                 if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
-                    size_t flat_n_idx = nz * (h * w) + ny * w + nx;
+                    size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
                     val = img[flat_n_idx];
                 }
                 
-                int binary_val = (val == 1) ? 1 : 0;
+                int binary_val = (val > 0) ? 1 : 0;
                 neighbors[n_idx] = binary_val;
                 
                 if (binary_val == 1) {
@@ -235,14 +240,31 @@ __global__ void remove_marked_points_kernel(unsigned char* img, int d, int h, in
 
     if (x >= w || y >= h || z >= d) return;
 
-    size_t idx = z * (h * w) + y * w + x;
+    size_t idx = (size_t)z * (h * w) + y * w + x;
     if (img[idx] == 2) {
         img[idx] = 0;
         atomicAdd(changed, 1);
     }
 }
 
-void binary_thinning_cuda(torch::Tensor image) {
+struct is_marked {
+    unsigned char* img;
+    __host__ __device__
+    is_marked(unsigned char* _img) : img(_img) {}
+    __device__
+    bool operator()(const size_t& idx) const {
+        return img[idx] == 2;
+    }
+};
+
+__global__ void apply_updates_kernel(unsigned char* img, unsigned int* indices, int count, unsigned char val) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < count) {
+        img[indices[i]] = val;
+    }
+}
+
+void binary_thinning_cuda(torch::Tensor image, bool deterministic) {
     TORCH_CHECK(image.is_cuda(), "image must be a CUDA tensor");
     TORCH_CHECK(image.is_contiguous(), "image must be contiguous");
     TORCH_CHECK(image.scalar_type() == torch::kByte, "image must be a ByteTensor (uint8)");
@@ -251,6 +273,7 @@ void binary_thinning_cuda(torch::Tensor image) {
     int d = image.size(0);
     int h = image.size(1);
     int w = image.size(2);
+    size_t total_size = (size_t)d * h * w;
 
     unsigned char* d_img = image.data_ptr<unsigned char>();
 
@@ -265,6 +288,15 @@ void binary_thinning_cuda(torch::Tensor image) {
     int* d_changed;
     cudaMalloc(&d_changed, sizeof(int));
 
+    unsigned int* d_marked_indices = nullptr;
+    unsigned char* h_img = nullptr;
+
+    if (deterministic) {
+        cudaMalloc(&d_marked_indices, total_size * sizeof(unsigned int));
+        h_img = new unsigned char[total_size];
+        cudaMemcpy(h_img, d_img, total_size, cudaMemcpyDeviceToHost);
+    }
+
     dim3 blockSize(8, 8, 8);
     dim3 gridSize((w + blockSize.x - 1) / blockSize.x,
                   (h + blockSize.y - 1) / blockSize.y,
@@ -277,13 +309,87 @@ void binary_thinning_cuda(torch::Tensor image) {
             mark_deletable_points_kernel<<<gridSize, blockSize>>>(d_img, d, h, w, border);
             
             cudaMemset(d_changed, 0, sizeof(int));
-            remove_marked_points_kernel<<<gridSize, blockSize>>>(d_img, d, h, w, d_changed);
             
-            int changed_this_border = 0;
-            cudaMemcpy(&changed_this_border, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
-            h_changed += changed_this_border;
+            if (deterministic) {
+                thrust::counting_iterator<size_t> first(0);
+                thrust::counting_iterator<size_t> last(total_size);
+                thrust::device_ptr<unsigned int> dest(d_marked_indices);
+                
+                auto end_ptr = thrust::copy_if(thrust::device, first, last, dest, is_marked(d_img));
+                int h_count = end_ptr - dest;
+                
+                if (h_count > 0) {
+                    std::vector<unsigned int> h_marked(h_count);
+                    cudaMemcpy(h_marked.data(), d_marked_indices, h_count * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+                    
+                    std::vector<unsigned int> h_deleted;
+                    std::vector<unsigned int> h_restored;
+                    h_deleted.reserve(h_count);
+                    h_restored.reserve(h_count);
+
+                    for (int i = 0; i < h_count; ++i) {
+                        unsigned int idx = h_marked[i];
+                        
+                        int x = idx % w;
+                        int y = (idx / w) % h;
+                        int z = idx / (w * h);
+
+                        h_img[idx] = 0; // Temporarily delete
+
+                        int neighbors[27];
+                        for (int dz = -1; dz <= 1; ++dz) {
+                            for (int dy = -1; dy <= 1; ++dy) {
+                                for (int dx = -1; dx <= 1; ++dx) {
+                                    int nx = x + dx;
+                                    int ny = y + dy;
+                                    int nz = z + dz;
+                                    int n_idx = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
+                                    
+                                    int val = 0;
+                                    if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
+                                        size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
+                                        val = h_img[flat_n_idx];
+                                    }
+                                    neighbors[n_idx] = (val > 0) ? 1 : 0;
+                                }
+                            }
+                        }
+
+                        if (!is_simple_point(neighbors)) {
+                            h_img[idx] = 1; // Not simple anymore, restore
+                            h_restored.push_back(idx);
+                        } else {
+                            h_deleted.push_back(idx);
+                        }
+                    }
+                    
+                    if (!h_deleted.empty()) {
+                        cudaMemcpy(d_marked_indices, h_deleted.data(), h_deleted.size() * sizeof(unsigned int), cudaMemcpyHostToDevice);
+                        int threads = 256;
+                        int blocks = (h_deleted.size() + threads - 1) / threads;
+                        apply_updates_kernel<<<blocks, threads>>>(d_img, d_marked_indices, h_deleted.size(), 0);
+                        h_changed += h_deleted.size();
+                    }
+
+                    if (!h_restored.empty()) {
+                        cudaMemcpy(d_marked_indices, h_restored.data(), h_restored.size() * sizeof(unsigned int), cudaMemcpyHostToDevice);
+                        int threads = 256;
+                        int blocks = (h_restored.size() + threads - 1) / threads;
+                        apply_updates_kernel<<<blocks, threads>>>(d_img, d_marked_indices, h_restored.size(), 1);
+                    }
+                }
+            } else {
+                remove_marked_points_kernel<<<gridSize, blockSize>>>(d_img, d, h, w, d_changed);
+                int changed_this_border = 0;
+                cudaMemcpy(&changed_this_border, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+                h_changed += changed_this_border;
+            }
         }
     } while (h_changed > 0);
 
+    if (deterministic) {
+        cudaFree(d_marked_indices);
+        delete[] h_img;
+    }
     cudaFree(d_changed);
 }
