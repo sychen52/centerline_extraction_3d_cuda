@@ -18,7 +18,7 @@ This implementation provides two operating modes to suit your needs:
 * PyTorch (with CUDA support)
 
 ```bash
-git clone <repository_url>
+git clone https://github.com/sychen52/binary_thinning_3d_cuda.git
 cd binary_thinning_3d_cuda
 
 # Standard install
@@ -31,7 +31,7 @@ pip install -e ".[dev]"
 
 ## Usage
 
-The input must be a 3D contiguous PyTorch `uint8` (Byte) tensor located on a CUDA device. Values should be purely binary (`0` for background, `1` for foreground).
+The input must be a 3D contiguous PyTorch `uint8` (Byte) tensor located on a CUDA device. All non-zero values are treated as foreground (`0` for background, `>0` for foreground).
 
 ```python
 import torch

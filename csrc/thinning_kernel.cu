@@ -208,6 +208,7 @@ __global__ void mark_deletable_points_kernel(
                     val = img[flat_n_idx];
                 }
                 
+                // Both original foreground (1) and marked for deletion (2) are foreground
                 int binary_val = (val > 0) ? 1 : 0;
                 neighbors[n_idx] = binary_val;
                 
@@ -215,12 +216,12 @@ __global__ void mark_deletable_points_kernel(
                     num_neighbors++;
                 }
 
-                if (dx == 0 && dy == -1 && dz == 0 && currentBorder == 1 && val <= 0) isBorderPoint = true; // N
-                if (dx == 0 && dy == 1 && dz == 0 && currentBorder == 2 && val <= 0) isBorderPoint = true;  // S
-                if (dx == 1 && dy == 0 && dz == 0 && currentBorder == 3 && val <= 0) isBorderPoint = true;  // E
-                if (dx == -1 && dy == 0 && dz == 0 && currentBorder == 4 && val <= 0) isBorderPoint = true; // W
-                if (dx == 0 && dy == 0 && dz == 1 && currentBorder == 5 && val <= 0) isBorderPoint = true;  // U
-                if (dx == 0 && dy == 0 && dz == -1 && currentBorder == 6 && val <= 0) isBorderPoint = true; // B
+                if (dx == 0 && dy == -1 && dz == 0 && currentBorder == 1 && val == 0) isBorderPoint = true; // N
+                if (dx == 0 && dy == 1 && dz == 0 && currentBorder == 2 && val == 0) isBorderPoint = true;  // S
+                if (dx == 1 && dy == 0 && dz == 0 && currentBorder == 3 && val == 0) isBorderPoint = true;  // E
+                if (dx == -1 && dy == 0 && dz == 0 && currentBorder == 4 && val == 0) isBorderPoint = true; // W
+                if (dx == 0 && dy == 0 && dz == 1 && currentBorder == 5 && val == 0) isBorderPoint = true;  // U
+                if (dx == 0 && dy == 0 && dz == -1 && currentBorder == 6 && val == 0) isBorderPoint = true; // B
             }
         }
     }
@@ -289,10 +290,12 @@ void binary_thinning_cuda(torch::Tensor image, bool deterministic) {
     cudaMalloc(&d_changed, sizeof(int));
 
     unsigned int* d_marked_indices = nullptr;
+    at::Tensor marked_indices_tensor;
     unsigned char* h_img = nullptr;
 
     if (deterministic) {
-        cudaMalloc(&d_marked_indices, total_size * sizeof(unsigned int));
+        marked_indices_tensor = at::empty({(long long)total_size}, image.options().dtype(torch::kInt));
+        d_marked_indices = (unsigned int*)marked_indices_tensor.data_ptr<int>();
         h_img = new unsigned char[total_size];
         cudaMemcpy(h_img, d_img, total_size, cudaMemcpyDeviceToHost);
     }
@@ -388,7 +391,6 @@ void binary_thinning_cuda(torch::Tensor image, bool deterministic) {
     } while (h_changed > 0);
 
     if (deterministic) {
-        cudaFree(d_marked_indices);
         delete[] h_img;
     }
     cudaFree(d_changed);
