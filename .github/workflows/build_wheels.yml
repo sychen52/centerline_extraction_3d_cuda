@@ -29,6 +29,8 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '13.0.0' # Matches PyTorch's CUDA 13.0 build
+          linux-local-args: '["--toolkit"]'
+          non-local-caching: false
 
       - name: Install build dependencies
         run: |
