@@ -3,7 +3,7 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 setup(
     name="binary_thinning_3d",
-    version="1.0.4",
+    version="1.0.5",
     packages=["binary_thinning_3d"],
     install_requires=["torch", "numpy"],
     extras_require={"dev": ["SimpleITK", "itk-thickness3d"]},

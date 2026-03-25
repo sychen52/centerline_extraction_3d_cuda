@@ -41,6 +41,8 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cu130
 
       - name: Build Wheel
+        env:
+          TORCH_CUDA_ARCH_LIST: "7.0 7.5 8.0 8.6 8.9 9.0+PTX"
         run: |
           python setup.py bdist_wheel
 
