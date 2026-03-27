@@ -1,13 +1,26 @@
-from setuptools import setup
+import os
+import sys
+from setuptools import setup, Extension
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-setup(
-    name="binary_thinning_3d",
-    version="1.0.7",
-    packages=["binary_thinning_3d"],
-    install_requires=["torch", "numpy"],
-    extras_require={"dev": ["SimpleITK", "itk-thickness3d"]},
-    ext_modules=[
+# Read README.md for long_description
+this_directory = os.path.abspath(os.path.dirname(__file__))
+with open(os.path.join(this_directory, "README.md"), encoding="utf-8") as f:
+    long_description = f.read()
+
+# Check if we are building a source distribution (sdist)
+# During sdist, we don't necessarily need CUDA available to gather metadata.
+if "sdist" in sys.argv:
+    # Use a dummy extension so metadata can be gathered without CUDA checks
+    ext_modules = [
+        Extension(
+            "binary_thinning_3d.cuda_thinning_ext",
+            ["csrc/thinning.cpp", "csrc/thinning_kernel.cu"],
+        )
+    ]
+else:
+    # Use the real CUDAExtension for binary wheel builds
+    ext_modules = [
         CUDAExtension(
             "binary_thinning_3d.cuda_thinning_ext",
             [
@@ -15,6 +28,31 @@ setup(
                 "csrc/thinning_kernel.cu",
             ],
         ),
+    ]
+
+setup(
+    name="binary_thinning_3d_cuda",
+    version="1.1.5",
+    author="Shiyang Chen",
+    author_email="sychen52@gmail.com",
+    description="A fast 3D binary thinning implementation using CUDA and PyTorch.",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/sychen52/binary_thinning_3d_cuda",
+    project_urls={
+        "Bug Tracker": "https://github.com/sychen52/binary_thinning_3d_cuda/issues",
+    },
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: POSIX :: Linux",
+        "Topic :: Scientific/Engineering :: Image Processing",
+        "Intended Audience :: Science/Research",
     ],
+    packages=["binary_thinning_3d"],
+    install_requires=["torch", "numpy"],
+    extras_require={"dev": ["SimpleITK", "itk-thickness3d"]},
+    python_requires=">=3.8",
+    ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},
 )
