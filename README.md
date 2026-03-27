@@ -28,10 +28,10 @@ git clone https://github.com/sychen52/binary_thinning_3d_cuda.git
 cd binary_thinning_3d_cuda
 
 # Standard install
-pip install -e .
+pip install -e --no-build-isolation .
 
 # Install with development dependencies (for running benchmarks)
-pip install -e ".[dev]"
+pip install -e --no-build-isolation ".[dev]"
 ```
 *(Note: `itk-thickness3d` and `SimpleITK` are **not** hard dependencies. They are only included in the `[dev]` extras for the purpose of benchmarking and validating against the CPU implementation).*
 
