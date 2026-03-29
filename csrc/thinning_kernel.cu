@@ -394,7 +394,7 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
     cudaMemcpy(h_img, d_img, total_size, cudaMemcpyDeviceToHost);
   }
 
-  dim3 blockSize(8, 8, 8); // TODO: tune this!
+  dim3 blockSize(8, 4, 4);
   dim3 gridSize((w + blockSize.x - 1) / blockSize.x,
                 (h + blockSize.y - 1) / blockSize.y,
                 (d + blockSize.z - 1) / blockSize.z);
