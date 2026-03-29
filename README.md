@@ -2,7 +2,7 @@
 
 This package provides a blazing fast, memory-efficient GPU implementation of 3D Binary Thinning (skeletonization) using CUDA and PyTorch. 
 
-It is based on the [3D thinning algorithm by Lee and Kashyap (1994)](https://doi.org/10.1006/cvgi.1994.1039), which uses Euler characteristic invariance and 26-connectivity checks to safely erode a 3D binary volume down to a 1-pixel wide skeleton without altering its fundamental topology.
+It is based on the [3D thinning algorithm by Lee, Kashyap and Chu (1994)](https://doi.org/10.1006/cgip.1994.1042), which uses Euler characteristic invariance and 26-connectivity checks to safely erode a 3D binary volume down to a 1-pixel wide skeleton without altering its fundamental topology.
 
 ## Features
 
@@ -19,10 +19,19 @@ This implementation provides two topologically safe operating modes to suit your
 
 ## Installation
 
-### Dependencies
-* Python 3.8+
+### Prerequisites
+* Python 3.10+
 * PyTorch (with CUDA support)
+* A CUDA-capable GPU
 
+### Install from PyPI (Recommended)
+You can install the package directly from PyPI. Note that since this contains CUDA C++ extensions, it will be compiled on your machine during installation.
+```bash
+pip install binary-thinning-3d-cuda
+```
+
+### Install from Source (Advanced Users)
+For development or to run benchmarks, you can install from the source:
 ```bash
 git clone https://github.com/sychen52/binary_thinning_3d_cuda.git
 cd binary_thinning_3d_cuda
