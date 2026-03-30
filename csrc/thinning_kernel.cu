@@ -202,6 +202,28 @@ __host__ __device__ void uf_union(int i, int j, int *parent) {
   }
 }
 
+__host__ __device__ void get_neighbors(const unsigned char *img, int d, int h,
+                                       int w, int x, int y, int z,
+                                       int *neighbors) {
+  for (int dz = -1; dz <= 1; ++dz) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        int nx = x + dx;
+        int ny = y + dy;
+        int nz = z + dz;
+        int n_idx = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
+
+        int val = 0;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
+          size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
+          val = img[flat_n_idx];
+        }
+        neighbors[n_idx] = (val > 0) ? 1 : 0;
+      }
+    }
+  }
+}
+
 __host__ __device__ bool is_simple_point(const int *neighbors) {
   int parent[27];
   for (int i = 0; i < 27; ++i) {
@@ -254,49 +276,31 @@ __global__ void mark_deletable_points_kernel(unsigned char *img, int d, int h,
     return;
 
   int neighbors[27];
-  int num_neighbors = -1;
+  get_neighbors(img, d, h, w, x, y, z, neighbors);
+
   bool isBorderPoint = false;
-
-  for (int dz = -1; dz <= 1; ++dz) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dx = -1; dx <= 1; ++dx) {
-        int nx = x + dx;
-        int ny = y + dy;
-        int nz = z + dz;
-
-        int n_idx = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
-
-        int val = 0;
-        if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
-          size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
-          val = img[flat_n_idx];
-        }
-
-        int binary_val = (val > 0) ? 1 : 0;
-        neighbors[n_idx] = binary_val;
-
-        if (binary_val == 1) {
-          num_neighbors++;
-        }
-
-        if (dx == 0 && dy == -1 && dz == 0 && currentBorder == 1 && val == 0)
-          isBorderPoint = true; // N
-        if (dx == 0 && dy == 1 && dz == 0 && currentBorder == 2 && val == 0)
-          isBorderPoint = true; // S
-        if (dx == 1 && dy == 0 && dz == 0 && currentBorder == 3 && val == 0)
-          isBorderPoint = true; // E
-        if (dx == -1 && dy == 0 && dz == 0 && currentBorder == 4 && val == 0)
-          isBorderPoint = true; // W
-        if (dx == 0 && dy == 0 && dz == 1 && currentBorder == 5 && val == 0)
-          isBorderPoint = true; // U
-        if (dx == 0 && dy == 0 && dz == -1 && currentBorder == 6 && val == 0)
-          isBorderPoint = true; // B
-      }
-    }
-  }
+  if (currentBorder == 1 && neighbors[10] == 0)
+    isBorderPoint = true; // N
+  else if (currentBorder == 2 && neighbors[16] == 0)
+    isBorderPoint = true; // S
+  else if (currentBorder == 3 && neighbors[14] == 0)
+    isBorderPoint = true; // E
+  else if (currentBorder == 4 && neighbors[12] == 0)
+    isBorderPoint = true; // W
+  else if (currentBorder == 5 && neighbors[22] == 0)
+    isBorderPoint = true; // U
+  else if (currentBorder == 6 && neighbors[4] == 0)
+    isBorderPoint = true; // B
 
   if (!isBorderPoint)
     return;
+
+  int num_neighbors = 0;
+  for (int i = 0; i < 27; ++i) {
+    if (i != 13 && neighbors[i] == 1)
+      num_neighbors++;
+  }
+
   if (num_neighbors == 1)
     return;
   if (!is_euler_invariant(neighbors))
@@ -335,23 +339,7 @@ __global__ void subgrid_recheck_kernel(unsigned char *img, int d, int h, int w,
   img[idx] = 0; // Temporarily delete
 
   int neighbors[27];
-  for (int dz = -1; dz <= 1; ++dz) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dx = -1; dx <= 1; ++dx) {
-        int nx = x + dx;
-        int ny = y + dy;
-        int nz = z + dz;
-        int n_idx = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
-
-        int val = 0;
-        if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
-          size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
-          val = img[flat_n_idx];
-        }
-        neighbors[n_idx] = (val > 0) ? 1 : 0;
-      }
-    }
-  }
+  get_neighbors(img, d, h, w, x, y, z, neighbors);
 
   if (!is_simple_point(neighbors)) {
     img[idx] = 1; // Not simple anymore, restore
@@ -439,24 +427,7 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
             h_img[idx] = 0; // Temporarily delete
 
             int neighbors[27];
-            for (int dz = -1; dz <= 1; ++dz) {
-              for (int dy = -1; dy <= 1; ++dy) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                  int nx = x + dx;
-                  int ny = y + dy;
-                  int nz = z + dz;
-                  int n_idx = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
-
-                  int val = 0;
-                  if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 &&
-                      nz < d) {
-                    size_t flat_n_idx = (size_t)nz * (h * w) + ny * w + nx;
-                    val = h_img[flat_n_idx];
-                  }
-                  neighbors[n_idx] = (val > 0) ? 1 : 0;
-                }
-              }
-            }
+            get_neighbors(h_img, d, h, w, x, y, z, neighbors);
 
             if (!is_simple_point(neighbors)) {
               h_img[idx] = 1; // Not simple anymore, restore
