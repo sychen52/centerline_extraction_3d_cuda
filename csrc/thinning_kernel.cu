@@ -402,11 +402,12 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
   int h_changed = 0;
   do {
     h_changed = 0;
+    if (mode == 0) {
+      cudaMemset(d_changed, 0, sizeof(int));
+    }
     for (int border = 1; border <= 6; ++border) {
       mark_deletable_points_kernel<<<gridSize, blockSize>>>(d_img, d, h, w,
                                                             border);
-
-      cudaMemset(d_changed, 0, sizeof(int));
 
       thrust::counting_iterator<size_t> first(0);
       thrust::counting_iterator<size_t> last(total_size);
@@ -494,12 +495,13 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
             subgrid_recheck_kernel<<<blocks, threads>>>(
                 d_img, d, h, w, d_marked_indices, h_count, color, d_changed);
           }
-          int changed_this_border = 0;
-          cudaMemcpy(&changed_this_border, d_changed, sizeof(int),
-                     cudaMemcpyDeviceToHost);
-          h_changed += changed_this_border;
         }
       }
+    }
+    if (mode == 0) {
+      int pass_changed = 0;
+      cudaMemcpy(&pass_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+      h_changed += pass_changed;
     }
   } while (h_changed > 0);
 
