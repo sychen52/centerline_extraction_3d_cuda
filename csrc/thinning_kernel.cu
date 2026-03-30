@@ -360,11 +360,12 @@ __global__ void subgrid_recheck_kernel(unsigned char *img, int d, int h, int w,
   }
 }
 
-__global__ void apply_updates_kernel(unsigned char *img, unsigned int *indices,
-                                     int count, unsigned char val) {
+__global__ void apply_updates_kernel(unsigned char *img,
+                                     const unsigned int *indices,
+                                     const unsigned char *values, int count) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < count) {
-    img[indices[i]] = val;
+    img[indices[i]] = values[i];
   }
 }
 
@@ -386,12 +387,14 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
   cudaMalloc(&d_changed, sizeof(int));
 
   unsigned int *d_marked_indices = nullptr;
+  unsigned char *d_new_values = nullptr;
   unsigned char *h_img = nullptr;
 
   cudaMalloc(&d_marked_indices, total_size * sizeof(unsigned int));
   if (mode == 1) { // Mode 1: Exact ITK Hybrid
     h_img = new unsigned char[total_size];
     cudaMemcpy(h_img, d_img, total_size, cudaMemcpyDeviceToHost);
+    cudaMalloc(&d_new_values, total_size * sizeof(unsigned char));
   }
 
   dim3 blockSize(8, 4, 4);
@@ -424,10 +427,7 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
           cudaMemcpy(h_marked.data(), d_marked_indices,
                      h_count * sizeof(unsigned int), cudaMemcpyDeviceToHost);
 
-          std::vector<unsigned int> h_deleted;
-          std::vector<unsigned int> h_restored;
-          h_deleted.reserve(h_count);
-          h_restored.reserve(h_count);
+          std::vector<unsigned char> h_new_values(h_count);
 
           for (int i = 0; i < h_count; ++i) {
             unsigned int idx = h_marked[i];
@@ -460,32 +460,19 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
 
             if (!is_simple_point(neighbors)) {
               h_img[idx] = 1; // Not simple anymore, restore
-              h_restored.push_back(idx);
+              h_new_values[i] = 1;
             } else {
-              h_deleted.push_back(idx);
+              h_new_values[i] = 0;
+              h_changed++;
             }
           }
 
-          if (!h_deleted.empty()) {
-            cudaMemcpy(d_marked_indices, h_deleted.data(),
-                       h_deleted.size() * sizeof(unsigned int),
-                       cudaMemcpyHostToDevice);
-            int threads = 256;
-            int blocks = (h_deleted.size() + threads - 1) / threads;
-            apply_updates_kernel<<<blocks, threads>>>(d_img, d_marked_indices,
-                                                      h_deleted.size(), 0);
-            h_changed += h_deleted.size();
-          }
-
-          if (!h_restored.empty()) {
-            cudaMemcpy(d_marked_indices, h_restored.data(),
-                       h_restored.size() * sizeof(unsigned int),
-                       cudaMemcpyHostToDevice);
-            int threads = 256;
-            int blocks = (h_restored.size() + threads - 1) / threads;
-            apply_updates_kernel<<<blocks, threads>>>(d_img, d_marked_indices,
-                                                      h_restored.size(), 1);
-          }
+          cudaMemcpy(d_new_values, h_new_values.data(),
+                     h_count * sizeof(unsigned char), cudaMemcpyHostToDevice);
+          int threads = 256;
+          int blocks = (h_count + threads - 1) / threads;
+          apply_updates_kernel<<<blocks, threads>>>(d_img, d_marked_indices,
+                                                    d_new_values, h_count);
         } else if (mode == 0) {
           // Mode 0: GPU Subgrid (8-color parallel) - Topologically safe, purely
           // GPU
@@ -508,6 +495,7 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
   cudaFree(d_marked_indices);
   if (mode == 1) {
     delete[] h_img;
+    cudaFree(d_new_values);
   }
   cudaFree(d_changed);
 }
