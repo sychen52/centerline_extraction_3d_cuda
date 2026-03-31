@@ -185,22 +185,6 @@ __device__ bool is_euler_invariant(const int *neighbors) {
   return (eulerChar == 0);
 }
 
-__host__ __device__ int uf_find(int i, int *parent) {
-  while (parent[i] != i) {
-    parent[i] = parent[parent[i]];
-    i = parent[i];
-  }
-  return i;
-}
-
-__host__ __device__ void uf_union(int i, int j, int *parent) {
-  int root_i = uf_find(i, parent);
-  int root_j = uf_find(j, parent);
-  if (root_i != root_j) {
-    parent[root_i] = root_j;
-  }
-}
-
 __host__ __device__ void get_neighbors(const unsigned char *img, int d, int h,
                                        int w, int x, int y, int z,
                                        int *neighbors) {
@@ -223,42 +207,62 @@ __host__ __device__ void get_neighbors(const unsigned char *img, int d, int h,
   }
 }
 
+/**
+ * Using region growing (similar to Octree labeling).
+ */
 __host__ __device__ bool is_simple_point(const int *neighbors) {
-  int parent[27];
+  int temp_neighbors[27]; // 0: background; 1: unvisited foreground; 2: visited
+                          // foreground
   for (int i = 0; i < 27; ++i) {
-    parent[i] = i;
-  }
-
-  for (int i = 0; i < 27; ++i) {
-    if (i == 13 || neighbors[i] != 1)
-      continue;
-    int x1 = i % 3;
-    int y1 = (i / 3) % 3;
-    int z1 = i / 9;
-
-    for (int j = i + 1; j < 27; ++j) {
-      if (j == 13 || neighbors[j] != 1)
-        continue;
-      int x2 = j % 3;
-      int y2 = (j / 3) % 3;
-      int z2 = j / 9;
-
-      if (abs(x1 - x2) <= 1 && abs(y1 - y2) <= 1 && abs(z1 - z2) <= 1) {
-        uf_union(i, j, parent);
-      }
-    }
+    temp_neighbors[i] = neighbors[i];
   }
 
   int components = 0;
   for (int i = 0; i < 27; ++i) {
-    if (i == 13)
+    if (i == 13 || temp_neighbors[i] != 1)
       continue;
-    if (neighbors[i] == 1 && parent[i] == i) {
-      components++;
+
+    // Found a new component
+    components++;
+    if (components > 1)
+      return false;
+
+    // Region growing to mark all voxels in this component
+    int stack[27];
+    int stack_ptr = 0;
+    stack[stack_ptr++] = i;
+    temp_neighbors[i] = 2; // Mark as visited
+
+    while (stack_ptr > 0) {
+      int curr = stack[--stack_ptr];
+      int cx = curr % 3;
+      int cy = (curr / 3) % 3;
+      int cz = curr / 9;
+
+      // Check all 26-neighbors of 'curr' WITHIN the 3x3x3 window
+      for (int dz = -1; dz <= 1; ++dz) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0 && dz == 0)
+              continue;
+            int nx = cx + dx;
+            int ny = cy + dy;
+            int nz = cz + dz;
+
+            if (nx >= 0 && nx < 3 && ny >= 0 && ny < 3 && nz >= 0 && nz < 3) {
+              int n_idx = nz * 9 + ny * 3 + nx;
+              if (n_idx != 13 && temp_neighbors[n_idx] == 1) {
+                temp_neighbors[n_idx] = 2;
+                stack[stack_ptr++] = n_idx;
+              }
+            }
+          }
+        }
+      }
     }
   }
 
-  return (components <= 1);
+  return (components == 1);
 }
 
 __global__ void mark_deletable_points_kernel(unsigned char *img, int d, int h,

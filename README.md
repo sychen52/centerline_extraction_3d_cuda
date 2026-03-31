@@ -77,8 +77,8 @@ The benchmark compares this CUDA implementation against `itk.BinaryThinningImage
 
 | Method | Output Voxel Count | Time (Seconds) | Speedup vs ITK | Matches ITK CPU? |
 | :--- | :--- | :--- | :--- | :--- |
-| **Mode 0 (GPU Subgrid)** | 4,286 | **0.42 s** | **331x** | Topologically equivalent |
-| **Mode 1 (Hybrid CPU)** | 4,281 | 1.38 s | 101x | **Yes (100% Identical)** |
+| **Mode 0 (GPU Subgrid)** | 4,286 | **0.38 s** | **331x** | Topologically equivalent |
+| **Mode 1 (Hybrid CPU)** | 4,281 | 1.22 s | 101x | **Yes (100% Identical)** |
 | **ITK (CPU Baseline)** | 4,281 | 139.90 s | 1x | Baseline |
 
 To reproduce these benchmarks yourself:

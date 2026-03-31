@@ -31,7 +31,7 @@ else:
 
 setup(
     name="binary_thinning_3d_cuda",
-    version="1.2.0",
+    version="1.2.1",
     author="Shiyang Chen",
     author_email="sychen52@gmail.com",
     description="A fast 3D binary thinning implementation using CUDA and PyTorch.",
