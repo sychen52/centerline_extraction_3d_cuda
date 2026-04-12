@@ -37,10 +37,10 @@ git clone https://github.com/sychen52/binary_thinning_3d_cuda.git
 cd binary_thinning_3d_cuda
 
 # Standard install
-pip install -e --no-build-isolation .
+pip install -e . --no-build-isolation
 
 # Install with development dependencies (for running benchmarks)
-pip install -e --no-build-isolation ".[dev]"
+pip install -e ".[dev]" --no-build-isolation
 ```
 *(Note: `itk-thickness3d` and `SimpleITK` are **not** hard dependencies. They are only included in the `[dev]` extras for the purpose of benchmarking and validating against the CPU implementation).*
 
@@ -72,6 +72,10 @@ binary_thinning(tensor, mode=1)
 ## Benchmark
 
 The following benchmark was run on a `(767, 512, 512)` NIfTI volume (CT Airways Label) containing `451,530` foreground voxels. 
+
+**Hardware:**
+- **CPU:** AMD Ryzen 7 2700 Eight-Core Processor
+- **GPU:** NVIDIA GeForce RTX 2070
 
 The benchmark compares this CUDA implementation against `itk.BinaryThinningImageFilter3D` (which is run sequentially on the CPU). The CUDA timings **include** the time for CPU-to-GPU and GPU-to-CPU data transfers.
 
