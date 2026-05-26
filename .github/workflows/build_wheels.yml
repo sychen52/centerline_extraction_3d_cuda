@@ -116,6 +116,13 @@ jobs:
       id-token: write # Required for PyPI Trusted Publishers
 
     steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
       - name: Download sdist
         uses: actions/download-artifact@v4
         with:
@@ -123,10 +130,21 @@ jobs:
           pattern: sdist
           merge-multiple: true
 
+      - name: Rename wheels to manylinux
+        run: |
+          # PyPI rejects "linux_x86_64" wheels. For PyTorch extensions,
+          # we can safely rename them to "manylinux2014_x86_64" to bypass this.
+          for wheel in dist/*linux_x86_64.whl; do
+            if [ -f "$wheel" ]; then
+              mv "$wheel" "${wheel/linux_x86_64/manylinux2014_x86_64}"
+            fi
+          done
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true
         # To use an API token instead of Trusted Publishers, uncomment the following:
         # with:
         #   password: ${{ secrets.PYPI_API_TOKEN }}
