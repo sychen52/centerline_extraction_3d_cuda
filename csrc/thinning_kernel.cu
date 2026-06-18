@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <optional>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <torch/extension.h>
@@ -358,7 +359,48 @@ __global__ void apply_updates_kernel(unsigned char *img,
   }
 }
 
-void binary_thinning_cuda(torch::Tensor image, int mode) {
+__global__ void inward_sweep_kernel(const unsigned char *img,
+                                    const float *probs_in, float *probs_out,
+                                    int d, int h, int w) {
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+  if (x >= w || y >= h || z >= d)
+    return;
+
+  size_t idx = (size_t)z * (h * w) + y * w + x;
+
+  if (img[idx] == 0) {
+    probs_out[idx] = 0.0f;
+    return;
+  }
+
+  float max_p = probs_in[idx];
+
+  for (int dz = -1; dz <= 1; ++dz) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0 && dz == 0)
+          continue;
+        int nx = x + dx;
+        int ny = y + dy;
+        int nz = z + dz;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
+          size_t n_idx = (size_t)nz * (h * w) + ny * w + nx;
+          float p = probs_in[n_idx];
+          if (p > max_p) {
+            max_p = p;
+          }
+        }
+      }
+    }
+  }
+  probs_out[idx] = max_p;
+}
+
+void thinning_internal(torch::Tensor image, int mode,
+                       std::optional<torch::Tensor> probs) {
   TORCH_CHECK(image.is_contiguous(), "image must be contiguous");
   TORCH_CHECK(image.scalar_type() == torch::kByte,
               "image must be a ByteTensor (uint8)");
@@ -377,6 +419,27 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
     d_tensor = image;
   }
   unsigned char *d_img = d_tensor.data_ptr<unsigned char>();
+
+  bool use_probs = probs.has_value();
+  float *d_probs_in = nullptr;
+  float *d_probs_out = nullptr;
+  torch::Tensor d_probs_tensor;
+  torch::Tensor d_probs_out_tensor;
+
+  if (use_probs) {
+    TORCH_CHECK(probs.value().scalar_type() == torch::kFloat32,
+                "probs must be a FloatTensor");
+    TORCH_CHECK(probs.value().is_contiguous(), "probs must be contiguous");
+
+    if (is_cpu) {
+      d_probs_tensor = probs.value().to(torch::kCUDA);
+    } else {
+      d_probs_tensor = probs.value();
+    }
+    d_probs_out_tensor = torch::empty_like(d_probs_tensor);
+    d_probs_in = d_probs_tensor.data_ptr<float>();
+    d_probs_out = d_probs_out_tensor.data_ptr<float>();
+  }
 
   int *d_changed;
   cudaMalloc(&d_changed, sizeof(int));
@@ -479,10 +542,25 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
       cudaMemcpy(&pass_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
       h_changed += pass_changed;
     }
+
+    if (use_probs && h_changed > 0) {
+      inward_sweep_kernel<<<gridSize, blockSize>>>(d_img, d_probs_in,
+                                                   d_probs_out, d, h, w);
+      std::swap(d_probs_in, d_probs_out);
+    }
   } while (h_changed > 0);
 
   if (is_cpu) {
     image.copy_(d_tensor);
+  }
+
+  if (use_probs) {
+    if (d_probs_in != d_probs_tensor.data_ptr<float>()) {
+      d_probs_tensor.copy_(d_probs_out_tensor);
+    }
+    if (is_cpu) {
+      probs.value().copy_(d_probs_tensor);
+    }
   }
 
   cudaFree(d_marked_indices);
@@ -494,4 +572,108 @@ void binary_thinning_cuda(torch::Tensor image, int mode) {
   }
   cudaFree(d_changed);
   cudaFree(d_marked_count);
+}
+
+__global__ void region_grow_backward_inplace(const unsigned char *mask,
+                                             unsigned char *visited,
+                                             float *grad, int d, int h, int w,
+                                             int *changed) {
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+  if (x >= w || y >= h || z >= d)
+    return;
+
+  size_t idx = (size_t)z * (h * w) + y * w + x;
+
+  if (mask[idx] == 0)
+    return;
+  if (visited[idx] >= 1)
+    return; // 1 or 2 means already visited
+
+  for (int dz = -1; dz <= 1; ++dz) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0 && dz == 0)
+          continue;
+        int nx = x + dx;
+        int ny = y + dy;
+        int nz = z + dz;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h && nz >= 0 && nz < d) {
+          size_t n_idx = (size_t)nz * (h * w) + ny * w + nx;
+          if (visited[n_idx] ==
+              1) { // Only pull from fully committed visited pixels
+            grad[idx] = grad[n_idx];
+            visited[idx] = 2; // mark as newly visited for this pass
+            atomicAdd(changed, 1);
+            return;
+          }
+        }
+      }
+    }
+  }
+}
+
+__global__ void commit_visited_kernel(unsigned char *visited, int d, int h,
+                                      int w) {
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  int z = blockIdx.z * blockDim.z + threadIdx.z;
+  if (x >= w || y >= h || z >= d)
+    return;
+  size_t idx = (size_t)z * (h * w) + y * w + x;
+  if (visited[idx] == 2)
+    visited[idx] = 1;
+}
+
+void region_grow_backward_cuda(torch::Tensor mask, torch::Tensor cl,
+                               torch::Tensor grad_S, torch::Tensor grad_prob) {
+  TORCH_CHECK(mask.is_cuda(), "mask must be a CUDA tensor");
+  TORCH_CHECK(cl.is_cuda(), "cl must be a CUDA tensor");
+  TORCH_CHECK(grad_S.is_cuda(), "grad_S must be a CUDA tensor");
+  TORCH_CHECK(grad_prob.is_cuda(), "grad_prob must be a CUDA tensor");
+
+  int d = mask.size(0);
+  int h = mask.size(1);
+  int w = mask.size(2);
+
+  torch::Tensor visited = cl.clone();
+
+  // grad_prob is pre-allocated by python
+  grad_prob.copy_(grad_S);
+  grad_prob.mul_(cl); // zero out everything not in skeleton
+
+  int *d_changed;
+  cudaMalloc(&d_changed, sizeof(int));
+
+  dim3 blockSize(8, 4, 4);
+  dim3 gridSize((w + blockSize.x - 1) / blockSize.x,
+                (h + blockSize.y - 1) / blockSize.y,
+                (d + blockSize.z - 1) / blockSize.z);
+
+  int h_changed = 0;
+  do {
+    cudaMemset(d_changed, 0, sizeof(int));
+    region_grow_backward_inplace<<<gridSize, blockSize>>>(
+        mask.data_ptr<unsigned char>(), visited.data_ptr<unsigned char>(),
+        grad_prob.data_ptr<float>(), d, h, w, d_changed);
+    cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+
+    if (h_changed > 0) {
+      commit_visited_kernel<<<gridSize, blockSize>>>(
+          visited.data_ptr<unsigned char>(), d, h, w);
+    }
+  } while (h_changed > 0);
+
+  cudaFree(d_changed);
+}
+
+void binary_thinning_cuda(torch::Tensor image, int mode) {
+  thinning_internal(image, mode, std::nullopt);
+}
+
+void extract_centerline_cuda(torch::Tensor mask, torch::Tensor probs,
+                             int mode) {
+  thinning_internal(mask, mode, probs);
 }
