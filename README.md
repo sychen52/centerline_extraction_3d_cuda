@@ -1,12 +1,16 @@
-# Binary Thinning 3D CUDA
+# Centerline Extraction 3D CUDA
 
-This package provides a blazing fast, memory-efficient GPU implementation of 3D Binary Thinning (skeletonization) using CUDA and PyTorch. 
+This package provides a blazing fast, memory-efficient GPU implementation of 3D Centerline Extraction and Binary Thinning (skeletonization) using CUDA and PyTorch. 
 
 It is based on the [3D thinning algorithm by Lee, Kashyap and Chu (1994)](https://doi.org/10.1006/cgip.1994.1042), which uses Euler characteristic invariance and 26-connectivity checks to safely erode a 3D binary volume down to a 1-pixel wide skeleton without altering its fundamental topology.
 
 ## Features
 
-This implementation provides two topologically safe operating modes to suit your needs:
+This package provides two primary functions:
+1. `binary_thinning(mask)`: Fast classical topological skeletonization from a discrete binary mask.
+2. `extract_centerline(mask, probs)`: Differentiable centerline extraction from a continuous probability map, with full PyTorch autograd backprop support.
+
+Both functions support two topologically safe operating modes to suit your needs:
 
 1. **Mode 0: GPU Subgrid 8-Color Parallel (`mode=0`, Default)**
    * **Speed:** Extremely Fast (~300x speedup over CPU)
@@ -27,14 +31,14 @@ This implementation provides two topologically safe operating modes to suit your
 ### Install from PyPI (Recommended)
 You can install the package directly from PyPI. Note that since this contains CUDA C++ extensions, it will be compiled on your machine during installation.
 ```bash
-pip install binary-thinning-3d-cuda
+pip install centerline-extraction-3d-cuda
 ```
 
 ### Install from Source (Advanced Users)
 For development or to run benchmarks, you can install from the source:
 ```bash
-git clone https://github.com/sychen52/binary_thinning_3d_cuda.git
-cd binary_thinning_3d_cuda
+git clone https://github.com/sychen52/centerline_extraction_3d_cuda.git
+cd centerline_extraction_3d_cuda
 
 # Standard install
 pip install -e . --no-build-isolation
@@ -55,18 +59,25 @@ All non-zero values are treated as foreground (`0` for background, `>0` for fore
 
 ```python
 import torch
-from binary_thinning_3d import binary_thinning
+import centerline_extraction_3d_cuda
 
 # Create or load a 3D binary mask (CPU or GPU)
-tensor = torch.zeros((100, 100, 100), dtype=torch.uint8)
+tensor = torch.zeros((100, 100, 100), dtype=torch.uint8).cuda()
 tensor[25:75, 25:75, 25:75] = 1 # Solid block
 
 # 1. GPU Subgrid (Default, Max Speed, Topologically Safe)
 # Modifies the tensor in-place (handles CPU<->GPU transfer automatically)
-binary_thinning(tensor, mode=0)
+centerline_extraction_3d_cuda.binary_thinning(tensor, mode=0)
 
 # 2. Hybrid CPU-GPU (Exact ITK Match)
-binary_thinning(tensor, mode=1)
+centerline_extraction_3d_cuda.binary_thinning(tensor, mode=1)
+
+# --- NEW: Differentiable Centerline Extraction ---
+probs = torch.rand((100, 100, 100), dtype=torch.float32).cuda()
+probs.requires_grad_(True)
+cl_probs = centerline_extraction_3d_cuda.extract_centerline(tensor, probs, mode=0)
+loss = cl_probs.sum()
+loss.backward()  # Gradients flow back to `probs`!
 ```
 
 ## Benchmark
@@ -88,6 +99,5 @@ The benchmark compares this CUDA implementation against `itk.BinaryThinningImage
 To reproduce these benchmarks yourself:
 ```bash
 # Ensure you installed with dev dependencies: pip install -e ".[dev]"
-python examples/process_nifti.py
+python examples/benchmark.py
 ```
-*(The script will cache the slow ITK result to disk on the first run, so subsequent runs finish instantly).*

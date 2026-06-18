@@ -13,7 +13,7 @@ if CUDA_HOME is None:
     # Use a dummy extension so metadata can be gathered without CUDA checks
     ext_modules = [
         Extension(
-            "binary_thinning_3d.cuda_thinning_ext",
+            "centerline_extraction_3d_cuda.cuda_thinning_ext",
             ["csrc/thinning.cpp", "csrc/thinning_kernel.cu"],
         )
     ]
@@ -21,7 +21,7 @@ else:
     # Use the real CUDAExtension for binary wheel builds
     ext_modules = [
         CUDAExtension(
-            "binary_thinning_3d.cuda_thinning_ext",
+            "centerline_extraction_3d_cuda.cuda_thinning_ext",
             [
                 "csrc/thinning.cpp",
                 "csrc/thinning_kernel.cu",
@@ -30,16 +30,16 @@ else:
     ]
 
 setup(
-    name="binary_thinning_3d_cuda",
-    version="1.2.3",
+    name="centerline_extraction_3d_cuda",
+    version="2.0.0",
     author="Shiyang Chen",
     author_email="sychen52@gmail.com",
-    description="A fast 3D binary thinning implementation using CUDA and PyTorch.",
+    description="A fast 3D continuous centerline extraction implementation using CUDA and PyTorch.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/sychen52/binary_thinning_3d_cuda",
+    url="https://github.com/sychen52/centerline_extraction_3d_cuda",
     project_urls={
-        "Bug Tracker": "https://github.com/sychen52/binary_thinning_3d_cuda/issues",
+        "Bug Tracker": "https://github.com/sychen52/centerline_extraction_3d_cuda/issues",
     },
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -48,7 +48,7 @@ setup(
         "Topic :: Scientific/Engineering :: Image Processing",
         "Intended Audience :: Science/Research",
     ],
-    packages=["binary_thinning_3d"],
+    packages=["centerline_extraction_3d_cuda"],
     install_requires=["torch", "numpy"],
     extras_require={"dev": ["SimpleITK", "itk-thickness3d"]},
     python_requires=">=3.8",

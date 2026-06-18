@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 import SimpleITK as sitk
-from binary_thinning_3d import binary_thinning
+from centerline_extraction_3d_cuda import binary_thinning
 
 
 def test_binary_thinning_hybrid_matches_itk():

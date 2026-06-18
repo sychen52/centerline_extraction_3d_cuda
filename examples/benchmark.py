@@ -3,7 +3,7 @@ import SimpleITK as sitk
 import numpy as np
 import time
 import os
-from binary_thinning_3d import binary_thinning
+from centerline_extraction_3d_cuda import binary_thinning
 
 
 def run_benchmark(input_path, num_runs=5):
