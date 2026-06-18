@@ -1,29 +1,47 @@
+import os
 import torch
+import numpy as np
+import SimpleITK as sitk
 from binary_thinning_3d import binary_thinning
 
 
-def test_thinning():
-    # Create a 5x5x5 block and put a 3x3x3 cube in the middle
-    t = torch.zeros((5, 5, 5), dtype=torch.uint8, device="cuda")
-    t[1:4, 1:4, 1:4] = 1
+def test_binary_thinning_hybrid_matches_itk():
+    """
+    Tests that the mode 1 (Hybrid CPU Sync) binary_thinning exactly matches ITK's CPU thinning
+    to guarantee topological correctness.
 
-    print("Original sum:", t.sum().item())
+    The ground-truth output was computed from the CPU version (ITK).
+    We load these pre-computed NIfTI images directly from the data/ folder.
+    SimpleITK is listed in dev dependencies so it is available in the test environment.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    input_path = os.path.join(base_dir, "data", "1_CT_HR_label_airways.nii.gz")
+    itk_output_path = os.path.join(
+        base_dir, "data", "1_CT_HR_label_airways_thinned_itk.nii.gz"
+    )
 
-    # Run thinning
-    binary_thinning(t)
+    # Load data using SimpleITK
+    input_img = sitk.ReadImage(input_path)
+    input_array = sitk.GetArrayFromImage(input_img)
 
-    print("Thinned sum:", t.sum().item())
+    itk_output_img = sitk.ReadImage(itk_output_path)
+    itk_output_array = sitk.GetArrayFromImage(itk_output_img)
 
-    print("Coordinates of remaining points:")
-    coords = torch.nonzero(t)
-    for c in coords:
-        print(c.tolist())
+    # Convert to torch GPU tensor (ensure it is uint8)
+    tensor_input = torch.from_numpy(input_array > 0).to(torch.uint8).cuda()
 
-    print("Center pixel value:", t[2, 2, 2].item())
-    assert t.sum().item() == 3
-    assert t[2, 2, 2].item() == 1
-    print("Test passed!")
+    # Run hybrid CUDA thinning (mode=1 guarantees exact ITK sequential match)
+    output_tensor = binary_thinning(tensor_input, mode=1)
+
+    # Convert back to numpy for comparison
+    cuda_output_array = output_tensor.cpu().numpy()
+
+    # Compare
+    diff = np.sum(cuda_output_array != itk_output_array)
+
+    assert diff == 0, f"CUDA Mode 1 output differed from ITK by {diff} voxels!"
 
 
 if __name__ == "__main__":
-    test_thinning()
+    test_binary_thinning_hybrid_matches_itk()
+    print("All tests passed.")
